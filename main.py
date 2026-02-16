@@ -6,12 +6,44 @@ import subprocess
 from PIL import Image, ImageTk
 import io
 
+try:
+    import darkdetect
+    HAS_DARKDETECT = True
+except ImportError:
+    HAS_DARKDETECT = False
+
 from clip_service import CLIPService
 from cache_manager import CacheManager
 from search_engine import SearchEngine
 
 
 SUPPORTED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
+
+
+THEMES = {
+    'light': {
+        'bg': '#FFFFFF',
+        'fg': '#000000',
+        'frame_bg': '#F0F0F0',
+        'canvas_bg': '#FFFFFF',
+        'entry_bg': '#FFFFFF',
+        'entry_fg': '#000000',
+        'text_bg': '#FFFFFF',
+        'text_fg': '#000000',
+        'accent': '#0078D4',
+    },
+    'dark': {
+        'bg': '#1E1E1E',
+        'fg': '#FFFFFF',
+        'frame_bg': '#2D2D2D',
+        'canvas_bg': '#1E1E1E',
+        'entry_bg': '#3C3C3C',
+        'entry_fg': '#FFFFFF',
+        'text_bg': '#2D2D2D',
+        'text_fg': '#FFFFFF',
+        'accent': '#0078D4',
+    }
+}
 
 
 class ImageSearchApp:
@@ -28,7 +60,18 @@ class ImageSearchApp:
         self.model_loaded = False
         self.embedding = False
 
+        self.current_theme = 'dark' if self._detect_dark_mode() else 'light'
+
         self._setup_ui()
+        self._apply_theme()
+
+    def _detect_dark_mode(self):
+        if HAS_DARKDETECT:
+            try:
+                return darkdetect.isDark()
+            except:
+                return False
+        return False
 
     def _setup_ui(self):
         main_frame = ttk.Frame(self.root, padding="10")
@@ -39,7 +82,8 @@ class ImageSearchApp:
         top_frame = ttk.Frame(main_frame)
         top_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
 
-        ttk.Label(top_frame, text="Folders to scan:").grid(row=0, column=0, sticky=tk.W)
+        self.folder_label = ttk.Label(top_frame, text="Folders to scan:")
+        self.folder_label.grid(row=0, column=0, sticky=tk.W)
         
         self.folders_text = tk.Text(top_frame, height=3, width=60, state='disabled')
         self.folders_text.grid(row=1, column=0, padx=(0, 10), pady=5)
@@ -47,16 +91,25 @@ class ImageSearchApp:
         btn_frame = ttk.Frame(top_frame)
         btn_frame.grid(row=1, column=1)
 
-        ttk.Button(btn_frame, text="Add Folder", command=self._add_folder).pack(fill=tk.X, pady=2)
-        ttk.Button(btn_frame, text="Generate Embeddings", command=self._start_embedding_thread).pack(fill=tk.X, pady=2)
-        ttk.Button(btn_frame, text="Clear Cache", command=self._clear_cache).pack(fill=tk.X, pady=2)
+        self.add_folder_btn = ttk.Button(btn_frame, text="Add Folder", command=self._add_folder)
+        self.add_folder_btn.pack(fill=tk.X, pady=2)
+        
+        self.gen_embeddings_btn = ttk.Button(btn_frame, text="Generate Embeddings", command=self._start_embedding_thread)
+        self.gen_embeddings_btn.pack(fill=tk.X, pady=2)
+        
+        self.clear_cache_btn = ttk.Button(btn_frame, text="Clear Cache", command=self._clear_cache)
+        self.clear_cache_btn.pack(fill=tk.X, pady=2)
 
-        self.stats_label = ttk.Label(btn_frame, text="", font=('Arial', 8))
+        self.toggle_theme_btn = ttk.Button(btn_frame, text="Toggle Theme", command=self._toggle_theme)
+        self.toggle_theme_btn.pack(fill=tk.X, pady=2)
+
+        self.stats_label = ttk.Label(btn_frame, text="", font=('Roboto', 8))
         self.stats_label.pack(pady=5)
         self._update_stats()
 
         status_frame = ttk.LabelFrame(main_frame, text="Status", padding="5")
         status_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        self.status_frame = status_frame
         
         self.status_label = ttk.Label(status_frame, text="Ready")
         self.status_label.pack()
@@ -66,12 +119,17 @@ class ImageSearchApp:
 
         search_frame = ttk.LabelFrame(main_frame, text="Search", padding="5")
         search_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        self.search_frame = search_frame
 
-        ttk.Label(search_frame, text="Query:").grid(row=0, column=0, sticky=tk.W)
+        self.search_label = ttk.Label(search_frame, text="Query:")
+        self.search_label.grid(row=0, column=0, sticky=tk.W)
+        
         self.search_entry = ttk.Entry(search_frame, width=60)
         self.search_entry.grid(row=0, column=1, padx=5)
         self.search_entry.bind('<Return>', lambda e: self._start_search())
-        ttk.Button(search_frame, text="Search", command=self._start_search).grid(row=0, column=2)
+        
+        self.search_btn = ttk.Button(search_frame, text="Search", command=self._start_search)
+        self.search_btn.grid(row=0, column=2)
 
         self.results_canvas = tk.Canvas(main_frame, bg='white')
         self.results_canvas.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S))
@@ -88,11 +146,52 @@ class ImageSearchApp:
         main_frame.columnconfigure(0, weight=1)
         main_frame.rowconfigure(3, weight=1)
 
+    def _apply_theme(self):
+        theme = THEMES[self.current_theme]
+        
+        self.root.configure(bg=theme['bg'])
+        
+        style = ttk.Style()
+        style.theme_use('clam')
+        
+        style.configure('.', background=theme['bg'], foreground=theme['fg'], font=('Roboto', 10))
+        style.configure('TFrame', background=theme['bg'])
+        style.configure('TLabelframe', background=theme['bg'], foreground=theme['fg'])
+        style.configure('TLabelframe.Label', background=theme['bg'], foreground=theme['fg'])
+        style.configure('TButton', font=('Roboto', 10))
+        
+        self.folder_label.configure(background=theme['bg'], foreground=theme['fg'])
+        self.stats_label.configure(background=theme['bg'], foreground=theme['fg'])
+        self.status_label.configure(background=theme['bg'], foreground=theme['fg'])
+        self.search_label.configure(background=theme['bg'], foreground=theme['fg'])
+        
+        self.folders_text.configure(background=theme['entry_bg'], foreground=theme['entry_fg'], insertbackground=theme['entry_fg'])
+        
+        self.search_entry.configure(style='Custom.TEntry')
+        style.configure('Custom.TEntry', fieldbackground=theme['entry_bg'], foreground=theme['entry_fg'], insertcolor=theme['entry_fg'])
+        
+        self.results_canvas.configure(background=theme['canvas_bg'])
+        
+        style.configure('Vertical.TScrollbar', background=theme['frame_bg'])
+        
+        style.configure('Custom.TFrame', background=theme['frame_bg'])
+
+    def _toggle_theme(self):
+        self.current_theme = 'dark' if self.current_theme == 'light' else 'light'
+        self._apply_theme()
+
     def _add_folder(self):
         folder = filedialog.askdirectory()
         if folder:
             self.folders.add(folder)
-        self._update_folders_text()
+            self._update_folders_text()
+
+    def _update_folders_text(self):
+        self.folders_text.configure(state='normal')
+        self.folders_text.delete('1.0', tk.END)
+        for folder in self.folders:
+            self.folders_text.insert(tk.END, folder + '\n')
+        self.folders_text.configure(state='disabled')
 
     def _update_stats(self):
         stats = self.cache_manager.get_stats()
@@ -205,6 +304,8 @@ class ImageSearchApp:
         for widget in self.results_frame.winfo_children():
             widget.destroy()
 
+        theme = THEMES[self.current_theme]
+
         if not results:
             ttk.Label(self.results_frame, text="No results found").pack(pady=20)
             return
@@ -221,6 +322,7 @@ class ImageSearchApp:
                 
                 frame = ttk.Frame(self.results_frame, relief="raised", padding="5")
                 frame.grid(row=row, column=col, padx=5, pady=5, sticky=(tk.W, tk.E))
+                frame.configure(style='Custom.TFrame')
                 
                 lbl = ttk.Label(frame, image=photo, cursor="hand2")
                 lbl.image = photo
@@ -229,9 +331,10 @@ class ImageSearchApp:
                 lbl.bind("<Button-1>", lambda e, p=img_path: self._open_image(p))
                 lbl.bind("<Button-3>", lambda e, p=img_path, f=frame: self._show_context_menu(e, p, f))
                 
-                ttk.Label(frame, text=f"{score:.3f}", font=('Arial', 8)).pack()
+                ttk.Label(frame, text=f"{score:.3f}", font=('Roboto', 8)).pack()
                 
-                ttk.Label(frame, text=os.path.basename(img_path), font=('Arial', 7), wraplength=140, cursor="hand2").pack()
+                safe_filename = ''.join(c if ord(c) < 128 else '?' for c in os.path.basename(img_path))
+                ttk.Label(frame, text=safe_filename, font=('Roboto', 7), wraplength=140, cursor="hand2").pack()
                 
                 col += 1
                 if col >= max_cols:
@@ -246,7 +349,8 @@ class ImageSearchApp:
             subprocess.run(["xdg-open", img_path])
 
     def _show_context_menu(self, event, img_path, frame):
-        menu = tk.Menu(frame, tearoff=0)
+        theme = THEMES[self.current_theme]
+        menu = tk.Menu(frame, tearoff=0, bg=theme['entry_bg'], fg=theme['entry_fg'])
         menu.add_command(label="Open Path", command=lambda: self._open_folder(img_path))
         menu.add_command(label="Copy Path", command=lambda: self._copy_path(img_path))
         menu.tk_popup(event.x_root, event.y_root)
