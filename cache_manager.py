@@ -87,3 +87,24 @@ class CacheManager:
             for f in os.listdir(self.embeddings_dir):
                 os.remove(os.path.join(self.embeddings_dir, f))
         self._save_manifest({})
+
+    def get_stats(self) -> dict:
+        manifest = self._load_manifest()
+        image_count = len(manifest)
+        
+        total_size = 0
+        if os.path.exists(self.embeddings_dir):
+            for f in os.listdir(self.embeddings_dir):
+                fpath = os.path.join(self.embeddings_dir, f)
+                if os.path.isfile(fpath):
+                    total_size += os.path.getsize(fpath)
+        
+        folders = set()
+        for img_path in manifest.keys():
+            folders.add(os.path.dirname(img_path))
+        
+        return {
+            "image_count": image_count,
+            "cache_size_mb": total_size / (1024 * 1024),
+            "folders": sorted(folders)
+        }

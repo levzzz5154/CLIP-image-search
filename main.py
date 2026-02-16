@@ -50,6 +50,10 @@ class ImageSearchApp:
         ttk.Button(btn_frame, text="Generate Embeddings", command=self._start_embedding_thread).pack(fill=tk.X, pady=2)
         ttk.Button(btn_frame, text="Clear Cache", command=self._clear_cache).pack(fill=tk.X, pady=2)
 
+        self.stats_label = ttk.Label(btn_frame, text="", font=('Arial', 8))
+        self.stats_label.pack(pady=5)
+        self._update_stats()
+
         status_frame = ttk.LabelFrame(main_frame, text="Status", padding="5")
         status_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         
@@ -87,14 +91,12 @@ class ImageSearchApp:
         folder = filedialog.askdirectory()
         if folder:
             self.folders.add(folder)
-            self._update_folders_text()
+        self._update_folders_text()
 
-    def _update_folders_text(self):
-        self.folders_text.configure(state='normal')
-        self.folders_text.delete('1.0', tk.END)
-        for folder in self.folders:
-            self.folders_text.insert(tk.END, folder + '\n')
-        self.folders_text.configure(state='disabled')
+    def _update_stats(self):
+        stats = self.cache_manager.get_stats()
+        size_mb = stats["cache_size_mb"]
+        self.stats_label.config(text=f"Cached: {stats['image_count']} images ({size_mb:.1f} MB)")
 
     def _get_images_from_folders(self):
         images = []
@@ -132,6 +134,7 @@ class ImageSearchApp:
             
             if not images:
                 self.root.after(0, lambda: self.status_label.config(text="No new images to process"))
+                self.root.after(0, lambda: self._update_stats())
                 self.root.after(0, lambda: messagebox.showinfo("Done", "All images already have embeddings!"))
             else:
                 self.root.after(0, lambda: self.progress.pack(fill=tk.X, pady=5))
@@ -152,6 +155,7 @@ class ImageSearchApp:
                 
                 self.root.after(0, lambda: self.progress.pack_forget())
                 self.root.after(0, lambda: self.status_label.config(text=f"Done! {total} images processed"))
+                self.root.after(0, lambda: self._update_stats())
                 self.root.after(0, lambda: messagebox.showinfo("Done", f"Successfully processed {total} images!"))
         
         except Exception as e:
@@ -169,6 +173,7 @@ class ImageSearchApp:
         if messagebox.askyesno("Clear Cache", "This will delete all cached embeddings. Continue?"):
             self.cache_manager.clear_all()
             self.status_label.config(text="Cache cleared")
+            self._update_stats()
 
     def _start_search(self):
         query = self.search_entry.get().strip()
