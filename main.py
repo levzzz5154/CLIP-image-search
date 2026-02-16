@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import os
 import threading
+import subprocess
 from PIL import Image, ImageTk
 import io
 
@@ -221,13 +222,16 @@ class ImageSearchApp:
                 frame = ttk.Frame(self.results_frame, relief="raised", padding="5")
                 frame.grid(row=row, column=col, padx=5, pady=5, sticky=(tk.W, tk.E))
                 
-                lbl = ttk.Label(frame, image=photo)
+                lbl = ttk.Label(frame, image=photo, cursor="hand2")
                 lbl.image = photo
                 lbl.pack()
                 
+                lbl.bind("<Button-1>", lambda e, p=img_path: self._open_image(p))
+                lbl.bind("<Button-3>", lambda e, p=img_path, f=frame: self._show_context_menu(e, p, f))
+                
                 ttk.Label(frame, text=f"{score:.3f}", font=('Arial', 8)).pack()
                 
-                ttk.Label(frame, text=os.path.basename(img_path), font=('Arial', 7), wraplength=140).pack()
+                ttk.Label(frame, text=os.path.basename(img_path), font=('Arial', 7), wraplength=140, cursor="hand2").pack()
                 
                 col += 1
                 if col >= max_cols:
@@ -236,6 +240,25 @@ class ImageSearchApp:
             
             except Exception as e:
                 print(f"Error displaying {img_path}: {e}")
+
+    def _open_image(self, img_path):
+        if os.path.exists(img_path):
+            subprocess.run(["xdg-open", img_path])
+
+    def _show_context_menu(self, event, img_path, frame):
+        menu = tk.Menu(frame, tearoff=0)
+        menu.add_command(label="Open Path", command=lambda: self._open_folder(img_path))
+        menu.add_command(label="Copy Path", command=lambda: self._copy_path(img_path))
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _open_folder(self, img_path):
+        folder = os.path.dirname(img_path)
+        if os.path.exists(folder):
+            subprocess.run(["xdg-open", folder])
+
+    def _copy_path(self, img_path):
+        self.root.clipboard_clear()
+        self.root.clipboard_append(img_path)
 
 
 def main():
