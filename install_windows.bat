@@ -34,6 +34,23 @@ call venv\Scripts\activate.bat
 echo Upgrading pip...
 python -m pip install --upgrade pip
 
+:: Check for NVIDIA GPU and install PyTorch with CUDA support
+echo Checking for NVIDIA GPU...
+where nvidia-smi >nul 2>&1
+if %ERRORLEVEL% EQU 0 (
+    nvidia-smi >nul 2>&1
+    if %ERRORLEVEL% EQU 0 (
+        echo NVIDIA GPU detected! Installing PyTorch with CUDA support...
+        pip install torch --index-url https://download.pytorch.org/whl/cu121
+    ) else (
+        echo No NVIDIA GPU detected. Installing CPU-only PyTorch...
+        pip install torch
+    )
+) else (
+    echo nvidia-smi not found. Installing CPU-only PyTorch...
+    pip install torch
+)
+
 :: Install Python dependencies
 echo Installing Python dependencies...
 pip install -r requirements.txt
