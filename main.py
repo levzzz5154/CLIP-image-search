@@ -1,22 +1,16 @@
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext
+import sys
 import os
-import threading
 import subprocess
-from PIL import Image, ImageTk
-import io
+from PIL import Image
 
-try:
-    import darkdetect
-    HAS_DARKDETECT = True
-except ImportError:
-    HAS_DARKDETECT = False
-
-try:
-    from tkinterdnd2 import DND_FILES, TkinterDnD
-    HAS_DND = True
-except ImportError:
-    HAS_DND = False
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton,
+    QLineEdit, QProgressBar, QScrollArea, QGridLayout,
+    QVBoxLayout, QHBoxLayout, QMessageBox, QFileDialog, QMenu,
+    QListWidget, QGroupBox
+)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize
+from PyQt6.QtGui import QPixmap, QAction, QPalette, QColor, QDragEnterEvent, QDropEvent
 
 from clip_service import CLIPService
 from cache_manager import CacheManager
@@ -26,38 +20,63 @@ from search_engine import SearchEngine
 SUPPORTED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
 
 
-THEMES = {
-    'light': {
-        'bg': '#FFFFFF',
-        'fg': '#000000',
-        'frame_bg': '#F0F0F0',
-        'canvas_bg': '#FFFFFF',
-        'entry_bg': '#FFFFFF',
-        'entry_fg': '#000000',
-        'text_bg': '#FFFFFF',
-        'text_fg': '#000000',
-        'accent': '#0078D4',
-    },
-    'dark': {
-        'bg': '#1E1E1E',
-        'fg': '#FFFFFF',
-        'frame_bg': '#2D2D2D',
-        'canvas_bg': '#1E1E1E',
-        'entry_bg': '#3C3C3C',
-        'entry_fg': '#FFFFFF',
-        'text_bg': '#2D2D2D',
-        'text_fg': '#FFFFFF',
-        'accent': '#0078D4',
-    }
-}
+class EmbeddingWorker(QThread):
+    progress = pyqtSignal(int, int)
+    finished = pyqtSignal(int)
+    error = pyqtSignal(str)
+    status = pyqtSignal(str)
+
+    def __init__(self, clip_service, cache_manager, images):
+        super().__init__()
+        self.clip_service = clip_service
+        self.cache_manager = cache_manager
+        self.images = images
+
+    def run(self):
+        try:
+            self.clip_service.load()
+            total = len(self.images)
+            
+            for i, img_path in enumerate(self.images):
+                try:
+                    embedding = self.clip_service.get_image_embedding(img_path)
+                    self.cache_manager.save_embedding(img_path, embedding)
+                except Exception as e:
+                    print(f"Error: {e}")
+                
+                self.progress.emit(i + 1, total)
+            
+            self.finished.emit(total)
+        except Exception as e:
+            self.error.emit(str(e))
 
 
-class ImageSearchApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("CLIP Image Search")
-        self.root.geometry("1000x700")
+class SearchWorker(QThread):
+    finished = pyqtSignal(list)
+    error = pyqtSignal(str)
+    status = pyqtSignal(str)
 
+    def __init__(self, search_engine, query, image_path):
+        super().__init__()
+        self.search_engine = search_engine
+        self.query = query
+        self.image_path = image_path
+
+    def run(self):
+        try:
+            if self.image_path and os.path.exists(self.image_path):
+                results = self.search_engine.search_by_image(self.image_path)
+            else:
+                results = self.search_engine.search(self.query)
+            self.finished.emit(results)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class ImageSearchApp(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        
         self.clip_service = CLIPService()
         self.cache_manager = CacheManager()
         self.search_engine = SearchEngine(self.cache_manager, self.clip_service)
@@ -65,169 +84,236 @@ class ImageSearchApp:
         self.folders = set()
         self.model_loaded = False
         self.embedding = False
+        self.drop_image_path = None
+        
+        self.embedding_worker = None
+        self.search_worker = None
 
-        self.current_theme = 'dark' if self._detect_dark_mode() else 'light'
+        self.current_theme = 'dark'
+        
+        self.setWindowTitle("CLIP Image Search")
+        self.setGeometry(100, 100, 1000, 700)
 
         self._setup_ui()
         self._apply_theme()
 
-    def _detect_dark_mode(self):
-        if HAS_DARKDETECT:
-            try:
-                return darkdetect.isDark()
-            except:
-                return False
-        return False
-
     def _setup_ui(self):
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-
-        top_frame = ttk.Frame(main_frame)
-        top_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-
-        self.folder_label = ttk.Label(top_frame, text="Folders to scan:")
-        self.folder_label.grid(row=0, column=0, sticky=tk.W)
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
         
-        self.folders_text = tk.Text(top_frame, height=3, width=60, state='disabled')
-        self.folders_text.grid(row=1, column=0, padx=(0, 10), pady=5)
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(10, 10, 10, 10)
 
-        btn_frame = ttk.Frame(top_frame)
-        btn_frame.grid(row=1, column=1)
-
-        self.add_folder_btn = ttk.Button(btn_frame, text="Add Folder", command=self._add_folder)
-        self.add_folder_btn.pack(fill=tk.X, pady=2)
+        top_group = QGroupBox("Folders to scan")
+        top_layout = QHBoxLayout(top_group)
         
-        self.gen_embeddings_btn = ttk.Button(btn_frame, text="Generate Embeddings", command=self._start_embedding_thread)
-        self.gen_embeddings_btn.pack(fill=tk.X, pady=2)
+        self.folders_list = QListWidget()
+        self.folders_list.setMaximumHeight(80)
+        top_layout.addWidget(self.folders_list, 1)
+
+        btn_layout = QVBoxLayout()
+        btn_layout.setSpacing(5)
         
-        self.clear_cache_btn = ttk.Button(btn_frame, text="Clear Cache", command=self._clear_cache)
-        self.clear_cache_btn.pack(fill=tk.X, pady=2)
+        self.add_folder_btn = QPushButton("Add Folder")
+        self.add_folder_btn.clicked.connect(self._add_folder)
+        btn_layout.addWidget(self.add_folder_btn)
+        
+        self.gen_embeddings_btn = QPushButton("Generate Embeddings")
+        self.gen_embeddings_btn.clicked.connect(self._start_embedding)
+        btn_layout.addWidget(self.gen_embeddings_btn)
+        
+        self.clear_cache_btn = QPushButton("Clear Cache")
+        self.clear_cache_btn.clicked.connect(self._clear_cache)
+        btn_layout.addWidget(self.clear_cache_btn)
+        
+        self.toggle_theme_btn = QPushButton("Toggle Theme")
+        self.toggle_theme_btn.clicked.connect(self._toggle_theme)
+        btn_layout.addWidget(self.toggle_theme_btn)
+        
+        self.stats_label = QLabel("Cached: 0 images (0.0 MB)")
+        self.stats_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        btn_layout.addWidget(self.stats_label)
+        
+        top_layout.addLayout(btn_layout)
+        main_layout.addWidget(top_group)
 
-        self.toggle_theme_btn = ttk.Button(btn_frame, text="Toggle Theme", command=self._toggle_theme)
-        self.toggle_theme_btn.pack(fill=tk.X, pady=2)
+        status_group = QGroupBox("Status")
+        status_layout = QVBoxLayout(status_group)
+        
+        self.status_label = QLabel("Ready")
+        status_layout.addWidget(self.status_label)
+        
+        self.progress = QProgressBar()
+        self.progress.setVisible(False)
+        status_layout.addWidget(self.progress)
+        
+        main_layout.addWidget(status_group)
 
-        self.stats_label = ttk.Label(btn_frame, text="", font=('Roboto', 8))
-        self.stats_label.pack(pady=5)
+        search_group = QGroupBox("Search")
+        search_layout = QHBoxLayout(search_group)
+        
+        search_layout.addWidget(QLabel("Query:"))
+        
+        self.search_entry = QLineEdit()
+        self.search_entry.setPlaceholderText("Enter text to search...")
+        self.search_entry.returnPressed.connect(self._start_search)
+        search_layout.addWidget(self.search_entry, 1)
+        
+        self.search_btn = QPushButton("Search")
+        self.search_btn.clicked.connect(self._start_search)
+        search_layout.addWidget(self.search_btn)
+        
+        search_layout.addSpacing(10)
+        
+        self.drop_frame = DropFrame()
+        self.drop_frame.setMinimumSize(200, 60)
+        self.drop_frame.setMaximumSize(300, 80)
+        self.drop_frame.image_dropped.connect(self._set_dropped_image)
+        search_layout.addWidget(self.drop_frame)
+        
+        self.drop_label = QLabel("Drag image here\nor click to browse")
+        self.drop_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.drop_label.setMinimumSize(180, 50)
+        self.drop_frame.set_widget(self.drop_label)
+        
+        self.browse_img_btn = QPushButton("Browse Image")
+        self.browse_img_btn.clicked.connect(self._browse_image)
+        search_layout.addWidget(self.browse_img_btn)
+        
+        self.clear_img_btn = QPushButton("Clear Image")
+        self.clear_img_btn.clicked.connect(self._clear_dropped_image)
+        search_layout.addWidget(self.clear_img_btn)
+        
+        main_layout.addWidget(search_group, 0)
+
+        results_scroll = QScrollArea()
+        results_scroll.setWidgetResizable(True)
+        results_scroll.setAlignment(Qt.AlignmentFlag.AlignTop)
+        
+        self.results_widget = QWidget()
+        self.results_layout = QGridLayout(self.results_widget)
+        self.results_layout.setSpacing(10)
+        self.results_layout.setContentsMargins(5, 5, 5, 5)
+        
+        results_scroll.setWidget(self.results_widget)
+        main_layout.addWidget(results_scroll, 1)
+
         self._update_stats()
 
-        status_frame = ttk.LabelFrame(main_frame, text="Status", padding="5")
-        status_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
-        self.status_frame = status_frame
-        
-        self.status_label = ttk.Label(status_frame, text="Ready")
-        self.status_label.pack()
-
-        self.progress = ttk.Progressbar(status_frame, mode='determinate')
-        self.progress.pack(fill=tk.X, pady=5)
-
-        search_frame = ttk.LabelFrame(main_frame, text="Search", padding="5")
-        search_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
-        self.search_frame = search_frame
-
-        self.search_label = ttk.Label(search_frame, text="Query:")
-        self.search_label.grid(row=0, column=0, sticky=tk.W)
-        
-        self.search_entry = ttk.Entry(search_frame, width=60)
-        self.search_entry.grid(row=0, column=1, padx=5)
-        self.search_entry.bind('<Return>', lambda e: self._start_search())
-        
-        self.search_btn = ttk.Button(search_frame, text="Search", command=self._start_search)
-        self.search_btn.grid(row=0, column=2)
-
-        self.drop_image_path = None
-        
-        if HAS_DND:
-            self.drop_frame = tk.Frame(search_frame, width=200, height=60, relief="solid", bd=2)
-            self.drop_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
-            self.drop_frame.drop_target_register(DND_FILES)
-            self.drop_frame.dnd_bind('<<Drop>>', self._on_drop)
-            self.drop_label = tk.Label(self.drop_frame, text="Drag image here or click to browse")
-            self.drop_label.place(relx=0.5, rely=0.5, anchor="center")
-            self.drop_frame.bind('<Button-1>', lambda e: self._browse_image())
-        else:
-            self.drop_frame = tk.Frame(search_frame, width=200, height=60, relief="solid", bd=2)
-            self.drop_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
-            self.drop_label = tk.Label(self.drop_frame, text="Click to browse image")
-            self.drop_label.place(relx=0.5, rely=0.5, anchor="center")
-            self.drop_frame.bind('<Button-1>', lambda e: self._browse_image())
-        
-        self.clear_img_btn = ttk.Button(search_frame, text="Clear Image", command=self._clear_dropped_image)
-        self.clear_img_btn.grid(row=1, column=2, padx=5)
-
-        self.results_canvas = tk.Canvas(main_frame, bg='white')
-        self.results_canvas.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=self.results_canvas.yview)
-        scrollbar.grid(row=3, column=2, sticky=(tk.N, tk.S))
-        self.results_canvas.configure(yscrollcommand=scrollbar.set)
-
-        self.results_frame = ttk.Frame(self.results_canvas)
-        self.results_canvas.create_window((0, 0), window=self.results_frame, anchor='nw')
-
-        self.results_frame.bind('<Configure>', lambda e: self.results_canvas.configure(scrollregion=self.results_canvas.bbox('all')))
-
-        main_frame.columnconfigure(0, weight=1)
-        main_frame.rowconfigure(3, weight=1)
-
     def _apply_theme(self):
-        theme = THEMES[self.current_theme]
-        
-        self.root.configure(bg=theme['bg'])
-        
-        style = ttk.Style()
-        style.theme_use('clam')
-        
-        style.configure('.', background=theme['bg'], foreground=theme['fg'], font=('Roboto', 10))
-        style.configure('TFrame', background=theme['bg'])
-        style.configure('TLabelframe', background=theme['bg'], foreground=theme['fg'])
-        style.configure('TLabelframe.Label', background=theme['bg'], foreground=theme['fg'])
-        style.configure('TButton', font=('Roboto', 10))
-        
-        self.folder_label.configure(background=theme['bg'], foreground=theme['fg'])
-        self.stats_label.configure(background=theme['bg'], foreground=theme['fg'])
-        self.status_label.configure(background=theme['bg'], foreground=theme['fg'])
-        self.search_label.configure(background=theme['bg'], foreground=theme['fg'])
-        
-        self.folders_text.configure(background=theme['entry_bg'], foreground=theme['entry_fg'], insertbackground=theme['entry_fg'])
-        
-        self.search_entry.configure(style='Custom.TEntry')
-        style.configure('Custom.TEntry', fieldbackground=theme['entry_bg'], foreground=theme['entry_fg'], insertcolor=theme['entry_fg'])
-        
-        self.results_canvas.configure(background=theme['canvas_bg'])
-        
-        style.configure('Vertical.TScrollbar', background=theme['frame_bg'])
-        
-        style.configure('Custom.TFrame', background=theme['frame_bg'])
-        
-        if hasattr(self, 'drop_frame'):
-            self.drop_frame.configure(background=theme['entry_bg'], highlightbackground=theme['fg'], highlightcolor=theme['fg'])
-        if hasattr(self, 'drop_label'):
-            self.drop_label.configure(background=theme['entry_bg'], foreground=theme['fg'])
+        if self.current_theme == 'dark':
+            dark_palette = QPalette()
+            dark_palette.setColor(QPalette.ColorRole.Window, QColor(30, 30, 30))
+            dark_palette.setColor(QPalette.ColorRole.WindowText, QColor(255, 255, 255))
+            dark_palette.setColor(QPalette.ColorRole.Base, QColor(45, 45, 45))
+            dark_palette.setColor(QPalette.ColorRole.AlternateBase, QColor(30, 30, 30))
+            dark_palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(25, 25, 25))
+            dark_palette.setColor(QPalette.ColorRole.ToolTipText, QColor(255, 255, 255))
+            dark_palette.setColor(QPalette.ColorRole.Text, QColor(255, 255, 255))
+            dark_palette.setColor(QPalette.ColorRole.Button, QColor(45, 45, 45))
+            dark_palette.setColor(QPalette.ColorRole.ButtonText, QColor(255, 255, 255))
+            dark_palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 255, 255))
+            dark_palette.setColor(QPalette.ColorRole.Link, QColor(0, 120, 212))
+            dark_palette.setColor(QPalette.ColorRole.Highlight, QColor(0, 120, 212))
+            dark_palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+            self.setPalette(dark_palette)
+            
+            self._set_stylesheet("dark")
+        else:
+            self.setPalette(QPalette())
+            self._set_stylesheet("light")
+
+    def _set_stylesheet(self, theme):
+        if theme == "dark":
+            ss = """
+                QGroupBox {
+                    color: white;
+                    border: 1px solid #555;
+                    border-radius: 5px;
+                    margin-top: 10px;
+                    padding-top: 10px;
+                    font-weight: bold;
+                }
+                QGroupBox::title {
+                    subcontrol-origin: margin;
+                    left: 10px;
+                    padding: 0 5px;
+                }
+                QListWidget {
+                    background-color: #3C3C3C;
+                    color: white;
+                    border: 1px solid #555;
+                }
+                QLineEdit {
+                    background-color: #3C3C3C;
+                    color: white;
+                    border: 1px solid #555;
+                    padding: 5px;
+                    border-radius: 3px;
+                }
+                QPushButton {
+                    background-color: #3C3C3C;
+                    color: white;
+                    border: 1px solid #555;
+                    padding: 5px 15px;
+                    border-radius: 3px;
+                }
+                QPushButton:hover {
+                    background-color: #4C4C4C;
+                }
+                QPushButton:pressed {
+                    background-color: #2C2C2C;
+                }
+                QLabel {
+                    color: white;
+                }
+                QProgressBar {
+                    border: 1px solid #555;
+                    border-radius: 3px;
+                    text-align: center;
+                    background-color: #3C3C3C;
+                }
+                QProgressBar::chunk {
+                    background-color: #0078D4;
+                }
+            """
+        else:
+            ss = """
+                QGroupBox {
+                    border: 1px solid #aaa;
+                    border-radius: 5px;
+                    margin-top: 10px;
+                    padding-top: 10px;
+                    font-weight: bold;
+                }
+                QGroupBox::title {
+                    subcontrol-origin: margin;
+                    left: 10px;
+                    padding: 0 5px;
+                }
+            """
+        self.setStyleSheet(ss)
 
     def _toggle_theme(self):
         self.current_theme = 'dark' if self.current_theme == 'light' else 'light'
         self._apply_theme()
 
     def _add_folder(self):
-        folder = filedialog.askdirectory()
+        folder = QFileDialog.getExistingDirectory(self, "Select Folder")
         if folder:
             self.folders.add(folder)
-            self._update_folders_text()
+            self._update_folders_list()
 
-    def _update_folders_text(self):
-        self.folders_text.configure(state='normal')
-        self.folders_text.delete('1.0', tk.END)
+    def _update_folders_list(self):
+        self.folders_list.clear()
         for folder in self.folders:
-            self.folders_text.insert(tk.END, folder + '\n')
-        self.folders_text.configure(state='disabled')
+            self.folders_list.addItem(folder)
 
     def _update_stats(self):
         stats = self.cache_manager.get_stats()
         size_mb = stats["cache_size_mb"]
-        self.stats_label.config(text=f"Cached: {stats['image_count']} images ({size_mb:.1f} MB)")
+        self.stats_label.setText(f"Cached: {stats['image_count']} images ({size_mb:.1f} MB)")
 
     def _get_images_from_folders(self):
         images = []
@@ -241,114 +327,114 @@ class ImageSearchApp:
                             images.append(img_path)
         return images
 
-    def _start_embedding_thread(self):
+    def _start_embedding(self):
         if not self.folders:
-            messagebox.showwarning("No folders", "Please add at least one folder to scan.")
+            QMessageBox.warning(self, "No folders", "Please add at least one folder to scan.")
             return
         
         if self.embedding:
             return
         
+        images = self._get_images_from_folders()
+        
+        if not images:
+            QMessageBox.information(self, "Done", "All images already have embeddings!")
+            return
+        
         self.embedding = True
-        self.status_label.config(text="Loading CLIP model...")
-        self.progress.pack_forget()
+        self.status_label.setText("Loading CLIP model...")
+        self.progress.setVisible(True)
+        self.progress.setMaximum(len(images))
+        self.progress.setValue(0)
         
-        thread = threading.Thread(target=self._run_embedding)
-        thread.start()
+        self.gen_embeddings_btn.setEnabled(False)
+        
+        self.embedding_worker = EmbeddingWorker(self.clip_service, self.cache_manager, images)
+        self.embedding_worker.progress.connect(self._on_embedding_progress)
+        self.embedding_worker.finished.connect(self._on_embedding_done)
+        self.embedding_worker.error.connect(self._on_embedding_error)
+        self.embedding_worker.start()
 
-    def _run_embedding(self):
-        try:
-            self.clip_service.load()
-            self.model_loaded = True
-            
-            images = self._get_images_from_folders()
-            
-            if not images:
-                self.root.after(0, lambda: self.status_label.config(text="No new images to process"))
-                self.root.after(0, lambda: self._update_stats())
-                self.root.after(0, lambda: messagebox.showinfo("Done", "All images already have embeddings!"))
-            else:
-                self.root.after(0, lambda: self.progress.pack(fill=tk.X, pady=5))
-                self.root.after(0, lambda: self._update_progress(0, len(images)))
-                
-                total = len(images)
-                processed = 0
-                
-                for img_path in images:
-                    try:
-                        embedding = self.clip_service.get_image_embedding(img_path)
-                        self.cache_manager.save_embedding(img_path, embedding)
-                    except Exception as e:
-                        print(f"Error: {e}")
-                    
-                    processed += 1
-                    self.root.after(0, lambda p=processed, t=total: self._update_progress(p, t))
-                
-                self.root.after(0, lambda: self.progress.pack_forget())
-                self.root.after(0, lambda: self.status_label.config(text=f"Done! {total} images processed"))
-                self.root.after(0, lambda: self._update_stats())
-                self.root.after(0, lambda: messagebox.showinfo("Done", f"Successfully processed {total} images!"))
-        
-        except Exception as e:
-            self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
-        
-        finally:
-            self.embedding = False
+    def _on_embedding_progress(self, current, total):
+        self.progress.setValue(current)
+        self.status_label.setText(f"Processing {current}/{total}...")
 
-    def _update_progress(self, current, total):
-        self.progress['maximum'] = total
-        self.progress['value'] = current
-        self.status_label.config(text=f"Processing {current}/{total}...")
+    def _on_embedding_done(self, total):
+        self.embedding = False
+        self.progress.setVisible(False)
+        self.status_label.setText(f"Done! {total} images processed")
+        self._update_stats()
+        self.model_loaded = True
+        self.gen_embeddings_btn.setEnabled(True)
+        QMessageBox.information(self, "Done", f"Successfully processed {total} images!")
+
+    def _on_embedding_error(self, error_msg):
+        self.embedding = False
+        self.progress.setVisible(False)
+        self.status_label.setText("Error")
+        self.gen_embeddings_btn.setEnabled(True)
+        QMessageBox.critical(self, "Error", error_msg)
 
     def _clear_cache(self):
-        if messagebox.askyesno("Clear Cache", "This will delete all cached embeddings. Continue?"):
+        reply = QMessageBox.question(
+            self, "Clear Cache", 
+            "This will delete all cached embeddings. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
             self.cache_manager.clear_all()
-            self.status_label.config(text="Cache cleared")
+            self.status_label.setText("Cache cleared")
             self._update_stats()
 
     def _start_search(self):
-        query = self.search_entry.get().strip()
+        query = self.search_entry.text().strip()
         has_text = bool(query)
         has_image = self.drop_image_path is not None and os.path.exists(self.drop_image_path)
         
         if not has_text and not has_image:
-            messagebox.showwarning("No input", "Please enter text or drop an image to search")
+            QMessageBox.warning(self, "No input", "Please enter text or drop an image to search")
             return
         
         if not self.model_loaded:
-            self.status_label.config(text="Loading CLIP model...")
-            thread = threading.Thread(target=self._load_and_search)
-            thread.start()
-        else:
-            self._do_search()
-
-    def _load_and_search(self):
-        self.clip_service.load()
-        self.model_loaded = True
-        self.root.after(0, self._do_search)
-
-    def _do_search(self):
-        query = self.search_entry.get().strip()
-        has_image = self.drop_image_path is not None and os.path.exists(self.drop_image_path)
+            self.status_label.setText("Loading CLIP model...")
+            self.clip_service.load()
+            self.model_loaded = True
         
         if has_image:
-            self.status_label.config(text=f"Searching by image: {os.path.basename(self.drop_image_path)}")
-            results = self.search_engine.search_by_image(self.drop_image_path)
+            self.status_label.setText(f"Searching by image: {os.path.basename(self.drop_image_path)}")
         else:
-            self.status_label.config(text=f"Searching for: {query}")
-            results = self.search_engine.search(query)
+            self.status_label.setText(f"Searching for: {query}")
         
+        self.search_btn.setEnabled(False)
+        
+        self.search_worker = SearchWorker(self.search_engine, query, self.drop_image_path)
+        self.search_worker.finished.connect(self._on_search_done)
+        self.search_worker.error.connect(self._on_search_error)
+        self.search_worker.start()
+
+    def _on_search_done(self, results):
+        self.search_btn.setEnabled(True)
         self._display_results(results)
-        self.status_label.config(text=f"Found {len(results)} results")
+        self.status_label.setText(f"Found {len(results)} results")
+
+    def _on_search_error(self, error_msg):
+        self.search_btn.setEnabled(True)
+        self.status_label.setText("Error")
+        QMessageBox.critical(self, "Error", error_msg)
+
+    def _clear_results(self):
+        while self.results_layout.count():
+            item = self.results_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
 
     def _display_results(self, results):
-        for widget in self.results_frame.winfo_children():
-            widget.destroy()
-
-        theme = THEMES[self.current_theme]
-
+        self._clear_results()
+        
         if not results:
-            ttk.Label(self.results_frame, text="No results found").pack(pady=20)
+            no_results = QLabel("No results found")
+            no_results.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.results_layout.addWidget(no_results, 0, 0, 1, 4)
             return
 
         row = 0
@@ -357,25 +443,41 @@ class ImageSearchApp:
 
         for img_path, score in results:
             try:
-                img = Image.open(img_path)
-                img.thumbnail((150, 150))
-                photo = ImageTk.PhotoImage(img)
+                frame = QFrame()
+                frame.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
+                frame_layout = QVBoxLayout(frame)
+                frame_layout.setSpacing(3)
+                frame_layout.setContentsMargins(5, 5, 5, 5)
                 
-                frame = ttk.Frame(self.results_frame, relief="raised", padding="5")
-                frame.grid(row=row, column=col, padx=5, pady=5, sticky=(tk.W, tk.E))
-                frame.configure(style='Custom.TFrame')
+                img_label = QLabel()
+                img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                img_label.setCursor(Qt.CursorShape.PointingHandCursor)
                 
-                lbl = ttk.Label(frame, image=photo, cursor="hand2")
-                lbl.image = photo
-                lbl.pack()
+                pixmap = QPixmap(img_path)
+                if pixmap.isNull():
+                    continue
+                pixmap = pixmap.scaled(150, 150, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                img_label.setPixmap(pixmap)
+                img_label.mousePressEvent = lambda e, p=img_path: self._open_image(p)
+                img_label.contextMenuEvent = lambda e, p=img_path, w=frame: self._show_context_menu(e, p, w)
                 
-                lbl.bind("<Button-1>", lambda e, p=img_path: self._open_image(p))
-                lbl.bind("<Button-3>", lambda e, p=img_path, f=frame: self._show_context_menu(e, p, f))
+                frame_layout.addWidget(img_label)
                 
-                ttk.Label(frame, text=f"{score:.3f}", font=('Roboto', 8)).pack()
+                score_label = QLabel(f"{score:.3f}")
+                score_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                score_label.setStyleSheet("font-size: 8pt;")
+                frame_layout.addWidget(score_label)
                 
-                safe_filename = ''.join(c if ord(c) < 128 else '?' for c in os.path.basename(img_path))
-                ttk.Label(frame, text=safe_filename, font=('Roboto', 7), wraplength=140, cursor="hand2").pack()
+                filename = os.path.basename(img_path)
+                name_label = QLabel(filename[:30] + "..." if len(filename) > 30 else filename)
+                name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                name_label.setStyleSheet("font-size: 7pt;")
+                name_label.setWordWrap(True)
+                name_label.setCursor(Qt.CursorShape.PointingHandCursor)
+                name_label.mousePressEvent = lambda e, p=img_path: self._open_image(p)
+                frame_layout.addWidget(name_label)
+                
+                self.results_layout.addWidget(frame, row, col)
                 
                 col += 1
                 if col >= max_cols:
@@ -389,12 +491,18 @@ class ImageSearchApp:
         if os.path.exists(img_path):
             subprocess.run(["xdg-open", img_path])
 
-    def _show_context_menu(self, event, img_path, frame):
-        theme = THEMES[self.current_theme]
-        menu = tk.Menu(frame, tearoff=0, bg=theme['entry_bg'], fg=theme['entry_fg'])
-        menu.add_command(label="Open Path", command=lambda: self._open_folder(img_path))
-        menu.add_command(label="Copy Path", command=lambda: self._copy_path(img_path))
-        menu.tk_popup(event.x_root, event.y_root)
+    def _show_context_menu(self, event, img_path, widget):
+        menu = QMenu(self)
+        
+        open_path_action = QAction("Open Path", self)
+        open_path_action.triggered.connect(lambda: self._open_folder(img_path))
+        menu.addAction(open_path_action)
+        
+        copy_path_action = QAction("Copy Path", self)
+        copy_path_action.triggered.connect(lambda: self._copy_path(img_path))
+        menu.addAction(copy_path_action)
+        
+        menu.exec(event.globalPos())
 
     def _open_folder(self, img_path):
         folder = os.path.dirname(img_path)
@@ -402,17 +510,13 @@ class ImageSearchApp:
             subprocess.run(["xdg-open", folder])
 
     def _copy_path(self, img_path):
-        self.root.clipboard_clear()
-        self.root.clipboard_append(img_path)
-
-    def _on_drop(self, event):
-        files = self.root.tk.splitlist(event.data)
-        if files:
-            self._set_dropped_image(files[0])
+        clipboard = QApplication.clipboard()
+        clipboard.setText(img_path)
 
     def _browse_image(self):
-        file_path = filedialog.askopenfilename(
-            filetypes=[("Image files", "*.jpg *.jpeg *.png *.gif *.bmp *.webp")]
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Image", "", 
+            "Image files (*.jpg *.jpeg *.png *.gif *.bmp *.webp)"
         )
         if file_path:
             self._set_dropped_image(file_path)
@@ -420,34 +524,64 @@ class ImageSearchApp:
     def _set_dropped_image(self, image_path):
         ext = os.path.splitext(image_path)[1].lower()
         if ext not in SUPPORTED_EXTENSIONS:
-            messagebox.showwarning("Invalid file", "Please drop an image file")
+            QMessageBox.warning(self, "Invalid file", "Please drop an image file")
             return
         
         self.drop_image_path = image_path
         
         try:
-            img = Image.open(image_path)
-            img.thumbnail((180, 50))
-            photo = ImageTk.PhotoImage(img)
-            
-            self.drop_label.config(image=photo, text="")
-            self.drop_label.image = photo
+            pixmap = QPixmap(image_path).scaled(180, 50, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            self.drop_label.setPixmap(pixmap)
+            self.drop_label.setText("")
         except Exception as e:
             print(f"Error loading preview: {e}")
-            self.drop_label.config(text=os.path.basename(image_path)[:30])
+            self.drop_label.setText(os.path.basename(image_path)[:30])
+            self.drop_label.setPixmap(QPixmap())
 
     def _clear_dropped_image(self):
         self.drop_image_path = None
-        self.drop_label.config(image="", text="Drag image here or click to browse")
+        self.drop_label.setPixmap(QPixmap())
+        self.drop_label.setText("Drag image here\nor click to browse")
+
+
+class DropFrame(QFrame):
+    image_dropped = pyqtSignal(str)
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Sunken)
+        self.setLineWidth(2)
+        self._widget = None
+        
+    def set_widget(self, widget):
+        self._widget = widget
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(widget)
+    
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+    
+    def dropEvent(self, event: QDropEvent):
+        if event.mimeData().hasUrls():
+            url = event.mimeData().urls()[0]
+            if url.isLocalFile():
+                self.image_dropped.emit(url.toLocalFile())
+        event.acceptProposedAction()
+    
+    def mousePressEvent(self, event):
+        if self._widget:
+            self._widget.mousePressEvent(event)
 
 
 def main():
-    if HAS_DND:
-        root = TkinterDnD.Tk()
-    else:
-        root = tk.Tk()
-    app = ImageSearchApp(root)
-    root.mainloop()
+    app = QApplication(sys.argv)
+    app.setStyle("Fusion")
+    window = ImageSearchApp()
+    window.show()
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":

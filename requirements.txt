@@ -2,5 +2,4 @@ torch
 transformers
 Pillow
 numpy
-darkdetect
-tkinterdnd2
+PyQt6
