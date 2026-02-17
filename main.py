@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton,
     QLineEdit, QProgressBar, QScrollArea, QGridLayout,
     QVBoxLayout, QHBoxLayout, QMessageBox, QFileDialog, QMenu,
-    QListWidget, QGroupBox
+    QListWidget, QGroupBox, QComboBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize
 from PyQt6.QtGui import QPixmap, QAction, QPalette, QColor, QDragEnterEvent, QDropEvent
@@ -18,6 +18,14 @@ from search_engine import SearchEngine
 
 
 SUPPORTED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
+
+MODELS = [
+    ("clip-vit-base-patch32", "CLIP ViT-B/32 (default)"),
+    ("clip-vit-base-patch16", "CLIP ViT-B/16"),
+    ("clip-vit-large-patch14", "CLIP ViT-L/14"),
+]
+
+DEFAULT_MODEL = "clip-vit-base-patch32"
 
 
 class EmbeddingWorker(QThread):
@@ -77,8 +85,9 @@ class ImageSearchApp(QMainWindow):
     def __init__(self):
         super().__init__()
         
-        self.clip_service = CLIPService()
-        self.cache_manager = CacheManager()
+        self.current_model = DEFAULT_MODEL
+        self.clip_service = CLIPService(f"openai/{DEFAULT_MODEL}")
+        self.cache_manager = CacheManager(model_name=DEFAULT_MODEL)
         self.search_engine = SearchEngine(self.cache_manager, self.clip_service)
 
         self.folders = set()
@@ -130,6 +139,17 @@ class ImageSearchApp(QMainWindow):
         self.toggle_theme_btn = QPushButton("Toggle Theme")
         self.toggle_theme_btn.clicked.connect(self._toggle_theme)
         btn_layout.addWidget(self.toggle_theme_btn)
+        
+        btn_layout.addWidget(QLabel("Model:"))
+        
+        self.model_combo = QComboBox()
+        for model_id, model_name in MODELS:
+            self.model_combo.addItem(model_name, model_id)
+        idx = self.model_combo.findData(DEFAULT_MODEL)
+        if idx >= 0:
+            self.model_combo.setCurrentIndex(idx)
+        self.model_combo.currentIndexChanged.connect(self._on_model_changed)
+        btn_layout.addWidget(self.model_combo)
         
         self.stats_label = QLabel("Cached: 0 images (0.0 MB)")
         self.stats_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -299,6 +319,35 @@ class ImageSearchApp(QMainWindow):
         self.current_theme = 'dark' if self.current_theme == 'light' else 'light'
         self._apply_theme()
 
+    def _on_model_changed(self, index):
+        new_model = self.model_combo.currentData()
+        if new_model == self.current_model:
+            return
+        
+        has_embeddings = self.cache_manager.get_stats()["image_count"] > 0
+        
+        if has_embeddings:
+            reply = QMessageBox.question(
+                self, "Switch Model",
+                f"Switch to {new_model}? This will use embeddings for {new_model} if they exist, or you can generate new ones.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                idx = self.model_combo.findData(self.current_model)
+                self.model_combo.blockSignals(True)
+                self.model_combo.setCurrentIndex(idx)
+                self.model_combo.blockSignals(False)
+                return
+        
+        self.current_model = new_model
+        self.clip_service.set_model(f"openai/{new_model}")
+        self.cache_manager.set_model(new_model)
+        self.search_engine = SearchEngine(self.cache_manager, self.clip_service)
+        self.model_loaded = False
+        self._clear_results()
+        self._update_stats()
+        self.status_label.setText(f"Switched to {new_model}")
+
     def _add_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Folder")
         if folder:
@@ -313,7 +362,7 @@ class ImageSearchApp(QMainWindow):
     def _update_stats(self):
         stats = self.cache_manager.get_stats()
         size_mb = stats["cache_size_mb"]
-        self.stats_label.setText(f"Cached: {stats['image_count']} images ({size_mb:.1f} MB)")
+        self.stats_label.setText(f"[{self.current_model}] Cached: {stats['image_count']} images ({size_mb:.1f} MB)")
 
     def _get_images_from_folders(self):
         images = []

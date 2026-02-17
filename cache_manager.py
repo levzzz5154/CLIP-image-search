@@ -6,14 +6,41 @@ from typing import Dict, List, Optional
 
 
 class CacheManager:
-    def __init__(self, cache_dir: str = "cache"):
+    def __init__(self, cache_dir: str = "cache", model_name: str = "clip-vit-base-patch32"):
         self.cache_dir = cache_dir
-        self.embeddings_dir = os.path.join(cache_dir, "embeddings")
-        self.manifest_path = os.path.join(cache_dir, "manifest.json")
-        self._ensure_dirs()
+        self.base_cache_dir = cache_dir
+        self.model_name = model_name
+        self._migrate_if_needed()
+        self._set_model_dir()
 
-    def _ensure_dirs(self):
+    def _migrate_if_needed(self):
+        old_manifest = os.path.join(self.cache_dir, "manifest.json")
+        if os.path.exists(old_manifest):
+            model_dir = os.path.join(self.cache_dir, self.model_name)
+            os.makedirs(model_dir, exist_ok=True)
+            old_emb_dir = os.path.join(self.cache_dir, "embeddings")
+            new_emb_dir = os.path.join(model_dir, "embeddings")
+            os.makedirs(new_emb_dir, exist_ok=True)
+            if os.path.exists(old_emb_dir):
+                for f in os.listdir(old_emb_dir):
+                    src = os.path.join(old_emb_dir, f)
+                    dst = os.path.join(new_emb_dir, f)
+                    if not os.path.exists(dst):
+                        os.rename(src, dst)
+            old_manifest_new = os.path.join(model_dir, "manifest.json")
+            if not os.path.exists(old_manifest_new):
+                os.rename(old_manifest, old_manifest_new)
+
+    def _set_model_dir(self):
+        self.model_cache_dir = os.path.join(self.base_cache_dir, self.model_name)
+        self.embeddings_dir = os.path.join(self.model_cache_dir, "embeddings")
+        self.manifest_path = os.path.join(self.model_cache_dir, "manifest.json")
         os.makedirs(self.embeddings_dir, exist_ok=True)
+
+    def set_model(self, model_name: str):
+        if model_name != self.model_name:
+            self.model_name = model_name
+            self._set_model_dir()
 
     def _get_embedding_filename(self, image_path: str) -> str:
         path_hash = hashlib.md5(image_path.encode()).hexdigest()

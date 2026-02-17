@@ -10,6 +10,12 @@ class CLIPService:
         self.model = None
         self.processor = None
 
+    def set_model(self, model_name: str):
+        if model_name != self.model_name:
+            self.model_name = model_name
+            self.model = None
+            self.processor = None
+
     def load(self):
         if self.model is None:
             self.processor = CLIPProcessor.from_pretrained(self.model_name)
