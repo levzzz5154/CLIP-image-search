@@ -507,7 +507,7 @@ class ImageSearchApp(QMainWindow):
                     continue
                 pixmap = pixmap.scaled(150, 150, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                 img_label.setPixmap(pixmap)
-                img_label.mousePressEvent = lambda e, p=img_path: self._open_image(p)
+                img_label.mousePressEvent = lambda e, p=img_path: self._open_image(p) if e.button() == Qt.MouseButton.LeftButton else None
                 img_label.contextMenuEvent = lambda e, p=img_path, w=frame: self._show_context_menu(e, p, w)
                 
                 frame_layout.addWidget(img_label)
@@ -523,7 +523,7 @@ class ImageSearchApp(QMainWindow):
                 name_label.setStyleSheet("font-size: 7pt;")
                 name_label.setWordWrap(True)
                 name_label.setCursor(Qt.CursorShape.PointingHandCursor)
-                name_label.mousePressEvent = lambda e, p=img_path: self._open_image(p)
+                name_label.mousePressEvent = lambda e, p=img_path: self._open_image(p) if e.button() == Qt.MouseButton.LeftButton else None
                 frame_layout.addWidget(name_label)
                 
                 self.results_layout.addWidget(frame, row, col)
@@ -551,6 +551,10 @@ class ImageSearchApp(QMainWindow):
         copy_path_action.triggered.connect(lambda: self._copy_path(img_path))
         menu.addAction(copy_path_action)
         
+        copy_image_action = QAction("Copy Image", self)
+        copy_image_action.triggered.connect(lambda: self._copy_image(img_path))
+        menu.addAction(copy_image_action)
+        
         menu.exec(event.globalPos())
 
     def _open_folder(self, img_path):
@@ -561,6 +565,12 @@ class ImageSearchApp(QMainWindow):
     def _copy_path(self, img_path):
         clipboard = QApplication.clipboard()
         clipboard.setText(img_path)
+
+    def _copy_image(self, img_path):
+        if os.path.exists(img_path):
+            pixmap = QPixmap(img_path)
+            clipboard = QApplication.clipboard()
+            clipboard.setPixmap(pixmap)
 
     def _browse_image(self):
         file_path, _ = QFileDialog.getOpenFileName(
