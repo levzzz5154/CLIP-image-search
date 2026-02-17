@@ -81,20 +81,16 @@ pip install --upgrade pip
 echo "Checking for NVIDIA GPU..."
 if command -v nvidia-smi &> /dev/null; then
     if nvidia-smi &> /dev/null; then
-        echo "NVIDIA GPU detected! Installing PyTorch with CUDA support..."
-        pip install torch --index-url https://download.pytorch.org/whl/cu121
+        echo "NVIDIA GPU detected! Installing with requirements-nvidia.txt..."
+        pip install -r requirements-nvidia.txt
     else
-        echo "No NVIDIA GPU detected. Installing CPU-only PyTorch..."
-        pip install torch
+        echo "No NVIDIA GPU detected. Installing with requirements-cpu.txt..."
+        pip install -r requirements-cpu.txt
     fi
 else
-    echo "nvidia-smi not found. Installing CPU-only PyTorch..."
-    pip install torch
+    echo "nvidia-smi not found. Installing with requirements-cpu.txt..."
+    pip install -r requirements-cpu.txt
 fi
-
-# Install Python dependencies
-echo "Installing Python dependencies..."
-pip install -r requirements.txt
 
 echo ""
 echo "=== Installation complete! ==="

@@ -40,20 +40,16 @@ where nvidia-smi >nul 2>&1
 if %ERRORLEVEL% EQU 0 (
     nvidia-smi >nul 2>&1
     if %ERRORLEVEL% EQU 0 (
-        echo NVIDIA GPU detected! Installing PyTorch with CUDA support...
-        pip install torch --index-url https://download.pytorch.org/whl/cu121
+        echo NVIDIA GPU detected! Installing with requirements-nvidia.txt...
+        pip install -r requirements-nvidia.txt
     ) else (
-        echo No NVIDIA GPU detected. Installing CPU-only PyTorch...
-        pip install torch
+        echo No NVIDIA GPU detected. Installing with requirements-cpu.txt...
+        pip install -r requirements-cpu.txt
     )
 ) else (
-    echo nvidia-smi not found. Installing CPU-only PyTorch...
-    pip install torch
+    echo nvidia-smi not found. Installing with requirements-cpu.txt...
+    pip install -r requirements-cpu.txt
 )
-
-:: Install Python dependencies
-echo Installing Python dependencies...
-pip install -r requirements.txt
 
 echo.
 echo === Installation complete! ===
