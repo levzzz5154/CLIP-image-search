@@ -19,9 +19,9 @@ A desktop application for searching images using OpenAI's CLIP (Contrastive Lang
 
 ## Installation
 
-### Linux
+The install scripts automatically detect NVIDIA GPUs and install the appropriate PyTorch version.
 
-Run the installation script:
+### Linux
 
 ```bash
 chmod +x install_linux.sh
@@ -31,12 +31,11 @@ chmod +x install_linux.sh
 The script will:
 - Detect your package manager (apt/dnf)
 - Install system dependencies for PyQt6
+- Detect NVIDIA GPU and install PyTorch with CUDA (if available)
 - Create a Python virtual environment
 - Install Python dependencies
 
 ### Windows
-
-Run the installation script:
 
 ```cmd
 install_windows.bat
@@ -44,8 +43,27 @@ install_windows.bat
 
 The script will:
 - Check for Python installation
+- Detect NVIDIA GPU and install PyTorch with CUDA (if available)
 - Create a Python virtual environment
 - Install Python dependencies
+
+### Manual Installation
+
+If you prefer to install manually:
+
+**With NVIDIA GPU:**
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements-nvidia.txt
+```
+
+**CPU only:**
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements-cpu.txt
+```
 
 ## Usage
 
@@ -94,20 +112,29 @@ python main.py
 
 ```
 imgsearch/
-├── main.py              # Main application entry point
-├── clip_service.py      # CLIP model wrapper
-├── search_engine.py     # Search functionality
-├── cache_manager.py     # Embedding cache management
-├── requirements.txt     # Python dependencies
-├── install_linux.sh    # Linux installation script
-├── install_windows.bat  # Windows installation script
-├── run_linux.sh        # Linux launch script
-├── run_windows.bat     # Windows launch script
-└── cache/              # Cached embeddings directory
+├── main.py                 # Main application entry point
+├── clip_service.py        # CLIP model wrapper
+├── search_engine.py        # Search functionality
+├── cache_manager.py        # Embedding cache management
+├── requirements.txt        # Default Python dependencies (CPU)
+├── requirements-cpu.txt    # Explicit CPU-only dependencies
+├── requirements-nvidia.txt # NVIDIA GPU dependencies (CUDA)
+├── install_linux.sh        # Linux installation script
+├── install_windows.bat    # Windows installation script
+├── run_linux.sh           # Linux launch script
+├── run_windows.bat        # Windows launch script
+└── cache/                 # Cached embeddings directory
 ```
 
 ## Dependencies
 
+The install script automatically selects the right version:
+
+- **requirements.txt** - Default (CPU torch)
+- **requirements-cpu.txt** - CPU-only torch
+- **requirements-nvidia.txt** - CUDA-enabled torch (cu121)
+
+Core dependencies:
 - torch
 - transformers
 - Pillow
