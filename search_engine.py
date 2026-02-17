@@ -27,6 +27,24 @@ class SearchEngine:
         
         return results[:top_k]
 
+    def search_by_image(self, image_path: str, top_k: int = 20) -> List[Tuple[str, float]]:
+        image_embedding = self.clip_service.get_image_embedding(image_path)
+        
+        embeddings = self.cache_manager.get_all_embeddings()
+        
+        if not embeddings:
+            return []
+        
+        results = []
+        
+        for img_path, img_embedding in embeddings.items():
+            similarity = self._cosine_similarity(image_embedding, img_embedding)
+            results.append((img_path, similarity))
+        
+        results.sort(key=lambda x: x[1], reverse=True)
+        
+        return results[:top_k]
+
     def _cosine_similarity(self, a: np.ndarray, b: np.ndarray) -> float:
         a = a / np.linalg.norm(a)
         b = b / np.linalg.norm(b)

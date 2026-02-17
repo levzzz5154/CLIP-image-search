@@ -12,6 +12,12 @@ try:
 except ImportError:
     HAS_DARKDETECT = False
 
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+    HAS_DND = True
+except ImportError:
+    HAS_DND = False
+
 from clip_service import CLIPService
 from cache_manager import CacheManager
 from search_engine import SearchEngine
@@ -131,6 +137,26 @@ class ImageSearchApp:
         self.search_btn = ttk.Button(search_frame, text="Search", command=self._start_search)
         self.search_btn.grid(row=0, column=2)
 
+        self.drop_image_path = None
+        
+        if HAS_DND:
+            self.drop_frame = tk.Frame(search_frame, width=200, height=60, relief="solid", bd=2)
+            self.drop_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+            self.drop_frame.drop_target_register(DND_FILES)
+            self.drop_frame.dnd_bind('<<Drop>>', self._on_drop)
+            self.drop_label = tk.Label(self.drop_frame, text="Drag image here or click to browse")
+            self.drop_label.place(relx=0.5, rely=0.5, anchor="center")
+            self.drop_frame.bind('<Button-1>', lambda e: self._browse_image())
+        else:
+            self.drop_frame = tk.Frame(search_frame, width=200, height=60, relief="solid", bd=2)
+            self.drop_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+            self.drop_label = tk.Label(self.drop_frame, text="Click to browse image")
+            self.drop_label.place(relx=0.5, rely=0.5, anchor="center")
+            self.drop_frame.bind('<Button-1>', lambda e: self._browse_image())
+        
+        self.clear_img_btn = ttk.Button(search_frame, text="Clear Image", command=self._clear_dropped_image)
+        self.clear_img_btn.grid(row=1, column=2, padx=5)
+
         self.results_canvas = tk.Canvas(main_frame, bg='white')
         self.results_canvas.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S))
         
@@ -175,6 +201,11 @@ class ImageSearchApp:
         style.configure('Vertical.TScrollbar', background=theme['frame_bg'])
         
         style.configure('Custom.TFrame', background=theme['frame_bg'])
+        
+        if hasattr(self, 'drop_frame'):
+            self.drop_frame.configure(background=theme['entry_bg'], highlightbackground=theme['fg'], highlightcolor=theme['fg'])
+        if hasattr(self, 'drop_label'):
+            self.drop_label.configure(background=theme['entry_bg'], foreground=theme['fg'])
 
     def _toggle_theme(self):
         self.current_theme = 'dark' if self.current_theme == 'light' else 'light'
@@ -277,25 +308,35 @@ class ImageSearchApp:
 
     def _start_search(self):
         query = self.search_entry.get().strip()
-        if not query:
+        has_text = bool(query)
+        has_image = self.drop_image_path is not None and os.path.exists(self.drop_image_path)
+        
+        if not has_text and not has_image:
+            messagebox.showwarning("No input", "Please enter text or drop an image to search")
             return
         
         if not self.model_loaded:
             self.status_label.config(text="Loading CLIP model...")
-            thread = threading.Thread(target=self._load_and_search, args=(query,))
+            thread = threading.Thread(target=self._load_and_search)
             thread.start()
         else:
-            self._do_search(query)
+            self._do_search()
 
-    def _load_and_search(self, query):
+    def _load_and_search(self):
         self.clip_service.load()
         self.model_loaded = True
-        self.root.after(0, lambda: self._do_search(query))
+        self.root.after(0, self._do_search)
 
-    def _do_search(self, query):
-        self.status_label.config(text=f"Searching for: {query}")
+    def _do_search(self):
+        query = self.search_entry.get().strip()
+        has_image = self.drop_image_path is not None and os.path.exists(self.drop_image_path)
         
-        results = self.search_engine.search(query)
+        if has_image:
+            self.status_label.config(text=f"Searching by image: {os.path.basename(self.drop_image_path)}")
+            results = self.search_engine.search_by_image(self.drop_image_path)
+        else:
+            self.status_label.config(text=f"Searching for: {query}")
+            results = self.search_engine.search(query)
         
         self._display_results(results)
         self.status_label.config(text=f"Found {len(results)} results")
@@ -364,9 +405,47 @@ class ImageSearchApp:
         self.root.clipboard_clear()
         self.root.clipboard_append(img_path)
 
+    def _on_drop(self, event):
+        files = self.root.tk.splitlist(event.data)
+        if files:
+            self._set_dropped_image(files[0])
+
+    def _browse_image(self):
+        file_path = filedialog.askopenfilename(
+            filetypes=[("Image files", "*.jpg *.jpeg *.png *.gif *.bmp *.webp")]
+        )
+        if file_path:
+            self._set_dropped_image(file_path)
+
+    def _set_dropped_image(self, image_path):
+        ext = os.path.splitext(image_path)[1].lower()
+        if ext not in SUPPORTED_EXTENSIONS:
+            messagebox.showwarning("Invalid file", "Please drop an image file")
+            return
+        
+        self.drop_image_path = image_path
+        
+        try:
+            img = Image.open(image_path)
+            img.thumbnail((180, 50))
+            photo = ImageTk.PhotoImage(img)
+            
+            self.drop_label.config(image=photo, text="")
+            self.drop_label.image = photo
+        except Exception as e:
+            print(f"Error loading preview: {e}")
+            self.drop_label.config(text=os.path.basename(image_path)[:30])
+
+    def _clear_dropped_image(self):
+        self.drop_image_path = None
+        self.drop_label.config(image="", text="Drag image here or click to browse")
+
 
 def main():
-    root = tk.Tk()
+    if HAS_DND:
+        root = TkinterDnD.Tk()
+    else:
+        root = tk.Tk()
     app = ImageSearchApp(root)
     root.mainloop()
 
